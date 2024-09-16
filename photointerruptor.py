@@ -9,7 +9,7 @@ def setup():
     GPIO.setmode(GPIO.BOARD)
     GPIO.setup(OutLed, GPIO.OUT) # Set Led Pin mode to output
     GPIO.setup(LightInPin, GPIO.IN, pull_up_down=GPIO.PUD_UP) # Set pull up to high level(3.3V)
-    GPIO.add_event_detect(LightInPin, GPIO.BOTH, callback=detect, bouncetime=50)
+    GPIO.add_event_detect(LightInPin, GPIO.BOTH, callback=detect, bouncetime=8)
  
 def Led(x):
     if x == 0:
@@ -19,8 +19,6 @@ def Led(x):
 
 def Print(x):
     if x == 1:
-        print(' 14CORE | Light Interrupter')
-        print(' --------------------------')
         print(' Light has been interrupted')
         print(' --------------------------')
         df = pd.DataFrame({'timestamp': [pd.Timestamp.now()]})
