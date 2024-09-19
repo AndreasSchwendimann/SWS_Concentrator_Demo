@@ -45,6 +45,15 @@ app.layout = html.Div([
         dcc.Input(id='spread-timeframe', type='number', value=5), html.Br(),
         html.Label('Select time within the last 12 hours:'), html.Br(),
         dcc.Dropdown(id='time-selector', options=[], value=None), html.Br(),
+        html.P('Select Particle Class:', style={'fontWeight': 'bold'}),
+        dcc.Dropdown(
+            id='particle-class-selector',
+            options=[
+                {'label': 'Class A', 'value': 'A'},
+                {'label': 'Class B', 'value': 'B'}
+            ],
+            value='A'  # Default value
+        ), html.Br(),
         html.Button('Generate Particle Data', id='generate-particles', n_clicks=0),
         html.Button('Remove Particle Data', id='remove-particles', n_clicks=0)
     ],
@@ -104,18 +113,19 @@ app.layout = html.Div([
 def remove_particles(n):
     if n is None or n == 0:
         return 0
-    pd.DataFrame(columns=['timestamp']).to_csv('measured_particles.csv', index=False)
+    pd.DataFrame(columns=['timestamp', 'class']).to_csv('measured_particles.csv', index=False)
     return 0
 
-# Callback to update the time-selector dropdown
+# Callback to generate particles
 @app.callback(
     Output('dummy-output', 'data'),
     Input('generate-particles', 'n_clicks'),
     State('nr-particles', 'value'),
     State('spread-timeframe', 'value'),
-    State('time-selector', 'value')
+    State('time-selector', 'value'),
+    State('particle-class-selector', 'value')
 )
-def generate_particles(n, nr_particles, spread_timeframe, selected_time):
+def generate_particles(n, nr_particles, spread_timeframe, selected_time, particle_class):
     if n is None or n == 0:
         return 0
     orig = pd.read_csv('./measured_particles.csv')
@@ -131,6 +141,9 @@ def generate_particles(n, nr_particles, spread_timeframe, selected_time):
     timestamps = pd.DataFrame([spread_start_time + pd.Timedelta(seconds=sec) for sec in random_seconds])
     timestamps = timestamps.apply(lambda x: x.dt.strftime('%Y-%m-%d %H:%M:%S.%f'))
     timestamps.columns = ['timestamp']
+    
+    # Add the particle class to the DataFrame
+    timestamps['class'] = particle_class
     
     exp = pd.concat([orig, timestamps], ignore_index=True)
     exp.to_csv('measured_particles.csv', index=False)
@@ -195,7 +208,6 @@ def update_volume(n, timeframe):
     volume = timeframe * 40  # volume in litres which were collected in the selected timeframe
     return f'{volume}L '
 
-# Callback to update histogram
 @callback(
     Output('histogram', 'figure'),
     Input('interval-trigger-s', 'n_intervals'),
@@ -215,8 +227,9 @@ def update_histogram(n, timeframe, bin_size, relayout_data):
     
     nr_bins = int(np.round(hours_shown * 60 / bin_size, 0))
     
-    fig = px.histogram(df_filtered, x='timestamp', nbins=nr_bins, title=f'')
-    fig.update_traces(marker_line_color='black', marker_line_width=1.5, name='# of particles')
+    # Create histogram with color based on particle class
+    fig = px.histogram(df_filtered, x='timestamp', nbins=nr_bins, color='class', title='')
+    fig.update_traces(marker_line_color='black', marker_line_width=1.5)
 
     # Add a red rectangle to highlight the selected timeframe
     fig.add_shape(
@@ -236,32 +249,66 @@ def update_histogram(n, timeframe, bin_size, relayout_data):
     # Set the x-axis range to the last 6 hours
     fig.update_layout(xaxis_range=[start_time, end_time])
     
-    # Calculate rolling concentration
-    df.set_index('timestamp', inplace=True)
-    df['_count'] = 1
+    # Calculate rolling concentration for Class A
+    df_class_a = df[df['class'] == 'A'].set_index('timestamp')
+    df_class_a['_count'] = 1
     
     # Add a row with a count of 0 at the current timestamp
     current_time_row = pd.DataFrame({'count': [0]}, index=[pd.Timestamp.now()])
-    df = pd.concat([df, current_time_row])
+    df_class_a = pd.concat([df_class_a, current_time_row])
     
     # Resample to fill missing timestamps
-    df = df.resample('1min').sum().fillna(0)
+    df_class_a = df_class_a.resample('1min').sum().fillna(0)
     
     rolling_window = f'{timeframe}min'
-    df['rolling_count'] = df['_count'].rolling(rolling_window).apply(
+    df_class_a['rolling_count'] = df_class_a['_count'].rolling(rolling_window).apply(
         lambda x: x.sum(), raw=False
     )
-    df['rolling_concentration'] = df['_count'].rolling(rolling_window).apply(
+    df_class_a['rolling_concentration'] = df_class_a['_count'].rolling(rolling_window).apply(
         lambda x: x.sum() / (timeframe * 40) * 100 * 1.67, raw=False
     )
     
-    df.reset_index(inplace=True)
+    df_class_a.reset_index(inplace=True)
 
     fig.add_trace(go.Scatter(
-        x=df['index'], 
-        y=df['rolling_concentration'], 
+        x=df_class_a['index'], 
+        y=df_class_a['rolling_concentration'], 
         mode='lines', 
-        name='Rolling Concentration', 
+        name='Rolling Concentration Class A', 
+        line=dict(color='blue'),
+        yaxis='y2',
+        hovertemplate=(
+            'Time: %{x}<br>'
+            'Rolling Concentration: %{y:.2f} particles/m<sup>3</sup><br>'
+            'Number of Particles: %{customdata}'
+        ),
+        customdata=df_class_a['rolling_count']  # Pass the number of particles as custom data
+    ))
+
+    # Calculate rolling concentration for Class B
+    df_class_b = df[df['class'] == 'B'].set_index('timestamp')
+    df_class_b['_count'] = 1
+    
+    # Add a row with a count of 0 at the current timestamp
+    df_class_b = pd.concat([df_class_b, current_time_row])
+    
+    # Resample to fill missing timestamps
+    df_class_b = df_class_b.resample('1min').sum().fillna(0)
+    
+    df_class_b['rolling_count'] = df_class_b['_count'].rolling(rolling_window).apply(
+        lambda x: x.sum(), raw=False
+    )
+    df_class_b['rolling_concentration'] = df_class_b['_count'].rolling(rolling_window).apply(
+        lambda x: x.sum() / (timeframe * 40) * 100 * 1.67, raw=False
+    )
+    
+    df_class_b.reset_index(inplace=True)
+
+    fig.add_trace(go.Scatter(
+        x=df_class_b['index'], 
+        y=df_class_b['rolling_concentration'], 
+        mode='lines', 
+        name='Rolling Concentration Class B', 
         line=dict(color='red'),
         yaxis='y2',
         hovertemplate=(
@@ -269,7 +316,7 @@ def update_histogram(n, timeframe, bin_size, relayout_data):
             'Rolling Concentration: %{y:.2f} particles/m<sup>3</sup><br>'
             'Number of Particles: %{customdata}'
         ),
-        customdata=df['rolling_count']  # Pass the number of particles as custom data
+        customdata=df_class_b['rolling_count']  # Pass the number of particles as custom data
     ))
 
     # Update layout to include secondary y-axis
