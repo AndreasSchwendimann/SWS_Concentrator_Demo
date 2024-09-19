@@ -30,18 +30,19 @@ app.layout = html.Div([
             id='timeframe-selector'),
         html.P('Select Binsize:', style={'fontWeight': 'bold'}),
         dcc.RadioItems(
-            options=[{'label': '1min', 'value': 1},
+            options=[{'label': '1s', 'value': 0.166666667},
+                {'label': '1min', 'value': 1},
                 {'label': '5min', 'value': 5},
                 {'label': '15min', 'value': 15},
                 {'label': '1h', 'value': 60},
                 {'label': '2h', 'value': 120}],
-            value=5, 
+            value=1, 
             id='bin-size-selector'),
         html.P('Generate Particles:', style={'fontWeight': 'bold'}),
         html.Label('Number of particles to generate:'), html.Br(),
-        dcc.Input(id='nr-particles', type='number', value=20), html.Br(),
+        dcc.Input(id='nr-particles', type='number', value=5), html.Br(),
         html.Label('Timeframe to spread particles (minutes):'), html.Br(),
-        dcc.Input(id='spread-timeframe', type='number', value=60), html.Br(),
+        dcc.Input(id='spread-timeframe', type='number', value=5), html.Br(),
         html.Label('Select time within the last 12 hours:'), html.Br(),
         dcc.Dropdown(id='time-selector', options=[], value=None), html.Br(),
         html.Button('Generate Particle Data', id='generate-particles', n_clicks=0),
@@ -200,13 +201,14 @@ def update_volume(n, timeframe):
     Input('interval-trigger-s', 'n_intervals'),
     Input('timeframe-selector', 'value'),
     Input('bin-size-selector', 'value'),
+    State('histogram', 'relayoutData')
 )
-def update_histogram(n, timeframe, bin_size):#, n_intervals):
+def update_histogram(n, timeframe, bin_size, relayout_data):
     df = pd.read_csv('./measured_particles.csv')
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     
     # Filter the DataFrame based on the selected timeframe
-    hours_shown = 12
+    hours_shown = 2
     end_time = pd.Timestamp.now()
     start_time = end_time - pd.Timedelta(hours=hours_shown)
     df_filtered = df[(df['timestamp'] >= start_time) & (df['timestamp'] <= end_time)]
@@ -214,7 +216,7 @@ def update_histogram(n, timeframe, bin_size):#, n_intervals):
     nr_bins = int(np.round(hours_shown * 60 / bin_size, 0))
     
     fig = px.histogram(df_filtered, x='timestamp', nbins=nr_bins, title=f'')
-    fig.update_traces(name='# of particles')
+    fig.update_traces(marker_line_color='black', marker_line_width=1.5, name='# of particles')
 
     # Add a red rectangle to highlight the selected timeframe
     fig.add_shape(
@@ -246,18 +248,52 @@ def update_histogram(n, timeframe, bin_size):#, n_intervals):
     df = df.resample('1min').sum().fillna(0)
     
     rolling_window = f'{timeframe}min'
+    df['rolling_count'] = df['_count'].rolling(rolling_window).apply(
+        lambda x: x.sum(), raw=False
+    )
     df['rolling_concentration'] = df['_count'].rolling(rolling_window).apply(
         lambda x: x.sum() / (timeframe * 40) * 100 * 1.67, raw=False
     )
     
     df.reset_index(inplace=True)
 
-    # Add rolling concentration as a line
-    fig.add_trace(go.Scatter(x=df['index'], y=df['rolling_concentration'], mode='lines', name='Rolling Concentration', line=dict(color='red')))
+    fig.add_trace(go.Scatter(
+        x=df['index'], 
+        y=df['rolling_concentration'], 
+        mode='lines', 
+        name='Rolling Concentration', 
+        line=dict(color='red'),
+        yaxis='y2',
+        hovertemplate=(
+            'Time: %{x}<br>'
+            'Rolling Concentration: %{y:.2f} particles/m<sup>3</sup><br>'
+            'Number of Particles: %{customdata}'
+        ),
+        customdata=df['rolling_count']  # Pass the number of particles as custom data
+    ))
+
+    # Update layout to include secondary y-axis
+    fig.update_layout(
+        yaxis=dict(
+            title="# of particles"
+        ),
+        yaxis2=dict(
+            title="concentration / particle per m<sup>3</sup>",
+            overlaying='y',
+            side='right',
+            showgrid=False
+        )
+    )
+
+    # Check if relayout_data contains the current x-axis range
+    if relayout_data and 'xaxis.range[0]' in relayout_data and 'xaxis.range[1]' in relayout_data:
+        current_xaxis_range = [relayout_data['xaxis.range[0]'], relayout_data['xaxis.range[1]']]
+        # Reapply the stored x-axis range
+        fig.update_layout(xaxis_range=current_xaxis_range)
 
     return fig
 
 
 # Run the app
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=False)
